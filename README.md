@@ -2,7 +2,7 @@
 
 A small, dependency-free TypeScript utility that turns vertical scroll progress into precise video seeking. CSS supplies the runway and sticky stage; JavaScript maps that geometry to `video.currentTime`.
 
-[View the live guide and demo](https://arvindang.github.io/scroll-video-scrubber/)
+[View the live guide and demo](https://arv.in/scroll-video-scrubber/)
 
 ## What it does
 

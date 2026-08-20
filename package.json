@@ -32,7 +32,7 @@
   "bugs": {
     "url": "https://github.com/arvindang/scroll-video-scrubber/issues"
   },
-  "homepage": "https://arvindang.github.io/scroll-video-scrubber/",
+  "homepage": "https://arv.in/scroll-video-scrubber/",
   "publishConfig": {
     "access": "public"
   },
