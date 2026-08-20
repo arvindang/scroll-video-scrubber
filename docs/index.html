@@ -1,0 +1,349 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta name="theme-color" content="#f4f1ea" />
+    <meta
+      name="description"
+      content="A dependency-free TypeScript utility for tying video time to native page scroll."
+    />
+    <meta property="og:title" content="Scroll Video Scrubber" />
+    <meta
+      property="og:description"
+      content="CSS builds the stage. JavaScript controls time. Native scroll stays in charge."
+    />
+    <meta property="og:type" content="website" />
+    <meta
+      property="og:url"
+      content="https://arvindang.github.io/scroll-video-scrubber/"
+    />
+    <title>Scroll Video Scrubber — Native scroll, precise video</title>
+  </head>
+  <body>
+    <a class="skip-link" href="#main">Skip to content</a>
+
+    <header class="site-header">
+      <a class="wordmark" href="#top" aria-label="Scroll Video Scrubber home">
+        <span class="wordmark__mark" aria-hidden="true">S/VS</span>
+        <span>Scroll Video Scrubber</span>
+      </a>
+      <nav aria-label="Primary navigation">
+        <a href="#how-it-works">How it works</a>
+        <a href="#install">Install</a>
+        <a href="#api">API</a>
+        <a
+          class="nav-github"
+          href="https://github.com/arvindang/scroll-video-scrubber"
+        >GitHub <span aria-hidden="true">↗</span></a>
+      </nav>
+    </header>
+
+    <main id="main">
+      <section class="hero" id="top" aria-labelledby="hero-title">
+        <div class="hero__eyebrow">
+          <span class="status-dot" aria-hidden="true"></span>
+          Dependency-free · TypeScript · Native scroll
+        </div>
+        <h1 id="hero-title">Make every scroll<br />a moment in time.</h1>
+        <p class="hero__lede">
+          A tiny, framework-agnostic utility that maps vertical scroll progress
+          to video frames—smoothly, reversibly, and without hijacking the page.
+        </p>
+        <div class="hero__actions">
+          <a class="button button--primary" href="#live-demo">Try the demo</a>
+          <button class="install-copy" type="button" data-copy-install>
+            <code>npm install github:arvindang/scroll-video-scrubber</code>
+            <span data-copy-label>Copy</span>
+          </button>
+        </div>
+        <div
+          class="hero__diagram"
+          role="img"
+          aria-label="Page scroll becomes progress from zero to one, which sets video current time"
+        >
+          <span>Page scroll</span>
+          <span class="diagram-arrow" aria-hidden="true">→</span>
+          <span>Progress 0–1</span>
+          <span class="diagram-arrow" aria-hidden="true">→</span>
+          <span><code>video.currentTime</code></span>
+        </div>
+      </section>
+
+      <section class="demo-intro" id="live-demo" aria-labelledby="demo-title">
+        <p class="kicker">Live demo</p>
+        <h2 id="demo-title">Keep scrolling. The timeline is yours.</h2>
+        <p>
+          Scroll down to move through the film. Scroll back up and time moves
+          backward with you. No autoplay loop, no scroll-jacking.
+        </p>
+      </section>
+
+      <section
+        class="scrub-demo"
+        data-video-scrubber
+        aria-label="Scroll-controlled flower video demonstration"
+      >
+        <div class="scrub-demo__stage" data-svs-sticky>
+          <video
+            class="scrub-demo__video"
+            data-svs-video
+            preload="auto"
+            muted
+            playsinline
+            controls
+            aria-label="White flower moving in the breeze"
+          >
+            <source
+              src="./assets/flower.mp4"
+              type="video/mp4"
+            />
+            Your browser does not support embedded video.
+          </video>
+
+          <div class="scrub-demo__shade" aria-hidden="true"></div>
+          <div class="scrub-demo__hud">
+            <p class="scrub-demo__counter">
+              <span data-progress-percent>00</span><small>%</small>
+            </p>
+            <p class="scrub-demo__instruction" data-demo-instruction>
+              Scroll to move through time
+            </p>
+          </div>
+
+          <div class="scrub-demo__beats" aria-live="polite" aria-atomic="true">
+            <p data-demo-beat>At first, the browser is simply paused.</p>
+          </div>
+
+          <div
+            class="scrub-demo__progress"
+            data-svs-progress
+            role="progressbar"
+            aria-label="Video scrub progress"
+            aria-valuemin="0"
+            aria-valuemax="100"
+            aria-valuenow="0"
+          ></div>
+        </div>
+      </section>
+
+      <section class="section section--how" id="how-it-works" aria-labelledby="how-title">
+        <div class="section__heading">
+          <p class="kicker">Separation of concerns</p>
+          <h2 id="how-title">CSS builds the stage.<br />JavaScript controls time.</h2>
+        </div>
+
+        <div class="responsibility-grid">
+          <article class="responsibility-card responsibility-card--css">
+            <p class="card-index">01 / CSS</p>
+            <h3>The scroll runway</h3>
+            <p>
+              A tall outer section gives the page room to scroll. A sticky inner
+              stage holds the composition in view. Your CSS still owns layout,
+              overlays, breakpoints, and visual progress.
+            </p>
+            <pre><code>.story { height: 400vh; }
+.stage {
+  position: sticky;
+  top: 0;
+  height: 100svh;
+}</code></pre>
+          </article>
+
+          <article class="responsibility-card responsibility-card--js">
+            <p class="card-index">02 / JavaScript</p>
+            <h3>The time mapping</h3>
+            <p>
+              The utility measures the runway, normalizes its travel to
+              <code>0–1</code>, and seeks the paused video to the matching time.
+              Work is coalesced to animation frames.
+            </p>
+            <pre><code>progress = clamp(scrolled / runway)
+time = progress × video.duration
+video.currentTime = time</code></pre>
+          </article>
+
+          <article class="responsibility-card responsibility-card--video">
+            <p class="card-index">03 / Video</p>
+            <h3>The frame delivery</h3>
+            <p>
+              The browser decoder supplies the frame. Short GOP encoding and
+              frequent keyframes make seeking feel immediate; a long GOP makes
+              even excellent JavaScript feel sluggish.
+            </p>
+            <div
+              class="keyframes"
+              role="img"
+              aria-label="Timeline with a keyframe every three frames"
+            >
+              <span>K</span><i></i><i></i><span>K</span><i></i><i></i><span>K</span><i></i><i></i><span>K</span>
+            </div>
+          </article>
+        </div>
+      </section>
+
+      <section class="section section--install" id="install" aria-labelledby="install-title">
+        <div class="section__heading">
+          <p class="kicker">Three small pieces</p>
+          <h2 id="install-title">From install to first frame.</h2>
+          <p>Use the baseline stylesheet or bring your own layout entirely.</p>
+        </div>
+
+        <div class="steps">
+          <article class="step">
+            <div class="step__number">1</div>
+            <div class="step__body">
+              <h3>Install from GitHub</h3>
+              <p>The package is public, but is not represented as npm-published.</p>
+              <pre><code>npm install github:arvindang/scroll-video-scrubber</code></pre>
+            </div>
+          </article>
+          <article class="step">
+            <div class="step__number">2</div>
+            <div class="step__body">
+              <h3>Add a runway, a sticky stage, and a video</h3>
+              <pre><code>&lt;section class="story" data-video-scrubber&gt;
+  &lt;div class="stage" data-svs-sticky&gt;
+    &lt;video data-svs-video muted playsinline&gt;
+      &lt;source src="story.mp4" type="video/mp4" /&gt;
+    &lt;/video&gt;
+    &lt;div data-svs-progress&gt;&lt;/div&gt;
+  &lt;/div&gt;
+&lt;/section&gt;</code></pre>
+            </div>
+          </article>
+          <article class="step">
+            <div class="step__number">3</div>
+            <div class="step__body">
+              <h3>Create the controller</h3>
+              <pre><code>import { createVideoScrubber } from
+  "@arvindang/scroll-video-scrubber";
+import "@arvindang/scroll-video-scrubber/styles.css";
+
+const scrubber = createVideoScrubber({
+  root: "[data-video-scrubber]",
+});</code></pre>
+              <p class="step__aside">
+                For static pages, import <code>autoInitVideoScrubbers</code> and
+                call it once to enhance every <code>[data-video-scrubber]</code>
+                root. Per-root <code>data-svs-*</code> attributes can override
+                selectors, frame rate, and reduced-motion behavior.
+              </p>
+            </div>
+          </article>
+        </div>
+      </section>
+
+      <section class="section section--api" id="api" aria-labelledby="api-title">
+        <div class="section__heading">
+          <p class="kicker">Small, explicit API</p>
+          <h2 id="api-title">Use selectors or elements.</h2>
+          <p>
+            Sensible discovery handles the basic case. Options are there when
+            your component needs tighter control.
+          </p>
+        </div>
+
+        <div class="api-layout">
+          <div class="api-table-wrap">
+            <table>
+              <thead>
+                <tr><th>Option</th><th>Default</th><th>Purpose</th></tr>
+              </thead>
+              <tbody>
+                <tr><td><code>root</code></td><td>required</td><td>The outer scroll runway.</td></tr>
+                <tr><td><code>video</code></td><td>discovered</td><td>Video element or selector.</td></tr>
+                <tr><td><code>sticky</code></td><td>discovered</td><td>Sticky stage used for geometry.</td></tr>
+                <tr><td><code>progress</code></td><td>discovered</td><td>Target for <code>--svs-progress</code>.</td></tr>
+                <tr><td><code>enabled</code></td><td><code>true</code></td><td>Starts the instance enabled or disabled.</td></tr>
+                <tr><td><code>frameRate</code></td><td><code>30</code></td><td>Skips sub-frame seek noise.</td></tr>
+                <tr><td><code>respectReducedMotion</code></td><td><code>true</code></td><td>Preserves the accessible fallback.</td></tr>
+                <tr><td><code>reducedMotionQuery</code></td><td>system preference</td><td>Custom motion media query.</td></tr>
+                <tr><td><code>unlockRootMargin</code></td><td><code>200px 0px</code></td><td>Controls how early media unlock runs.</td></tr>
+                <tr><td><code>onReady</code></td><td>—</td><td>Runs after metadata is usable.</td></tr>
+                <tr><td><code>onProgress</code></td><td>—</td><td>Reports normalized progress.</td></tr>
+                <tr><td><code>onError</code></td><td>—</td><td>Reports setup or media errors.</td></tr>
+              </tbody>
+            </table>
+          </div>
+
+          <aside class="controller-card" aria-labelledby="controller-title">
+            <p class="card-index">Returned controller</p>
+            <h3 id="controller-title">Lifecycle stays local.</h3>
+            <pre><code>scrubber.progress
+scrubber.enabled
+scrubber.update()
+scrubber.setProgress(0.5)
+scrubber.destroy()</code></pre>
+            <p>
+              Notifications use per-instance callbacks instead of global DOM
+              events. Destroy the controller when your component unmounts.
+            </p>
+          </aside>
+        </div>
+      </section>
+
+      <section class="section section--production" id="production" aria-labelledby="production-title">
+        <div class="section__heading">
+          <p class="kicker">Production checklist</p>
+          <h2 id="production-title">The asset is part of the interaction.</h2>
+        </div>
+        <div class="checklist-grid">
+          <article>
+            <span aria-hidden="true">K</span>
+            <h3>Encode a short GOP</h3>
+            <p>Start with a keyframe every 0.25–0.5 seconds, then test the real device mix.</p>
+          </article>
+          <article>
+            <span aria-hidden="true">↔</span>
+            <h3>Serve byte ranges</h3>
+            <p>Fast seeking depends on correct media MIME types and HTTP range support.</p>
+          </article>
+          <article>
+            <span aria-hidden="true">Aa</span>
+            <h3>Repeat the meaning</h3>
+            <p>Keep essential copy outside the video and caption meaningful audio.</p>
+          </article>
+          <article>
+            <span aria-hidden="true">⌁</span>
+            <h3>Honor reduced motion</h3>
+            <p>The default fallback returns control to an ordinary, user-operated video.</p>
+          </article>
+        </div>
+
+        <div class="browser-note">
+          <p class="card-index">Browser reality</p>
+          <p>
+            Mobile Safari may require a muted play/pause unlock before reliable
+            seeking. Metadata and duration can also arrive after the user has
+            begun scrolling. The utility handles both, but you should still test
+            your final encoding on Safari/iOS, Chrome/Android, and Firefox.
+          </p>
+        </div>
+      </section>
+
+      <section class="closing" aria-labelledby="closing-title">
+        <p class="kicker">MIT licensed</p>
+        <h2 id="closing-title">Native scroll.<br />Your video. Your story.</h2>
+        <a class="button button--light" href="https://github.com/arvindang/scroll-video-scrubber">
+          View the source on GitHub <span aria-hidden="true">↗</span>
+        </a>
+      </section>
+    </main>
+
+    <footer>
+      <p class="footer-copy">Scroll Video Scrubber · © 2026 Arvin Dang</p>
+      <p class="footer-copy">
+        Demo video: “Flower” from MDN’s CC0 media examples.
+        <a href="https://github.com/mdn/interactive-examples">Source</a>
+      </p>
+    </footer>
+
+    <noscript>
+      <div class="noscript-note">
+        JavaScript is off, so the demo remains a standard video with native controls.
+      </div>
+    </noscript>
+    <script type="module" src="./demo.ts"></script>
+  </body>
+</html>

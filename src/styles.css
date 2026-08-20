@@ -1,0 +1,40 @@
+/* Optional structural styles for Scroll Video Scrubber.
+ * Override the custom properties to fit the containing site. */
+
+[data-video-scrubber],
+.svs {
+  --svs-progress: 0;
+  --svs-sticky-top: 0px;
+  position: relative;
+}
+
+[data-svs-sticky],
+.svs__sticky {
+  position: sticky;
+  top: var(--svs-sticky-top);
+  min-height: calc(100svh - var(--svs-sticky-top));
+  overflow: clip;
+}
+
+[data-svs-video],
+.svs__video {
+  display: block;
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+
+[data-svs-progress],
+.svs__progress {
+  transform-origin: left center;
+  transform: scaleX(var(--svs-progress));
+  will-change: transform;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  [data-video-scrubber][data-svs-state="reduced-motion"] [data-svs-sticky],
+  .svs[data-svs-state="reduced-motion"] .svs__sticky {
+    position: relative;
+    min-height: auto;
+  }
+}
