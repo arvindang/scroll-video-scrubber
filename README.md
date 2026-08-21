@@ -110,7 +110,7 @@ There is no scroll-jacking and no animation framework. Native scrolling stays in
 | `respectReducedMotion` | `boolean` | `true` | Disables scroll seeking for users who request reduced motion. |
 | `reducedMotionQuery` | `string` | `(prefers-reduced-motion: reduce)` | Media query used for the reduced-motion preference. |
 | `frameRate` | `number` | `30` | Used to avoid seeks smaller than a useful frame interval. |
-| `unlockRootMargin` | `string` | `200px 0px` | How early the Safari/iOS media unlock is attempted. |
+| `unlockRootMargin` | `string` | `200px 0px` | How early the Safari/iOS media unlock observer starts watching. Playback waits for actual visibility. |
 | `onReady` | `(controller) => void` | — | Runs after usable video metadata is available. |
 | `onProgress` | `(progress, controller) => void` | — | Runs when effective progress changes. |
 | `onError` | `(error, controller) => void` | — | Receives recoverable setup or media errors. |

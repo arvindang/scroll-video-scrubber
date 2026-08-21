@@ -318,10 +318,13 @@ describe("createVideoScrubber", () => {
 
   it("unlocks near the viewport and retries a denied play on pointer input", async () => {
     const { root, video } = renderScrubber();
-    setVideoState(video, 10);
+    const media = setVideoState(video, 10);
+    vi.spyOn(video, "getBoundingClientRect").mockReturnValue(makeRect(100, 500));
     play.mockRejectedValueOnce(new DOMException("Denied", "NotAllowedError"));
     const scrubber = track(createVideoScrubber({ root, unlockRootMargin: "400px" }));
     const observer = IntersectionObserverMock.instances[0];
+    scrubber.setProgress(0.5);
+    expect(media.assignments).toHaveLength(1);
 
     expect(observer.rootMargin).toBe("400px");
     expect(observer.observe).toHaveBeenCalledWith(root);
@@ -335,6 +338,32 @@ describe("createVideoScrubber", () => {
     await Promise.resolve();
     expect(play).toHaveBeenCalledTimes(2);
     expect(pause).toHaveBeenCalled();
+    expect(observer.disconnect).toHaveBeenCalledOnce();
+    expect(media.assignments).toHaveLength(2);
+    expect(media.getCurrentTime()).toBeCloseTo((10 - 1 / 30) * 0.5);
+    expect(scrubber.enabled).toBe(true);
+  });
+
+  it("waits for actual visibility after an early unlock-margin intersection", async () => {
+    const { root, video } = renderScrubber();
+    setVideoState(video, 10);
+    let videoTop = 1100;
+    vi.spyOn(video, "getBoundingClientRect").mockImplementation(() => makeRect(videoTop, 500));
+    const scrubber = track(createVideoScrubber({ root }));
+    const observer = IntersectionObserverMock.instances[0];
+
+    observer.trigger(true);
+    await Promise.resolve();
+    expect(play).not.toHaveBeenCalled();
+    expect(observer.disconnect).not.toHaveBeenCalled();
+
+    videoTop = 100;
+    window.dispatchEvent(new Event("scroll"));
+    await Promise.resolve();
+    await Promise.resolve();
+    expect(play).toHaveBeenCalledOnce();
+    expect(pause).toHaveBeenCalledOnce();
+    expect(observer.disconnect).toHaveBeenCalledOnce();
     expect(scrubber.enabled).toBe(true);
   });
 
