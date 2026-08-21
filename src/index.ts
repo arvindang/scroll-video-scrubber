@@ -24,7 +24,7 @@ export interface VideoScrubberOptions {
   reducedMotionQuery?: string;
   /** Used for seek precision and to avoid the video's terminal black frame. */
   frameRate?: number;
-  /** How early the iOS media unlock is attempted. Defaults to `200px 0px`. */
+  /** How early the iOS media unlock observer starts watching. Defaults to `200px 0px`. */
   unlockRootMargin?: string;
   onProgress?: (progress: number, scrubber: VideoScrubber) => void;
   onReady?: (scrubber: VideoScrubber) => void;
@@ -252,7 +252,7 @@ export function createVideoScrubber(options: VideoScrubberOptions): VideoScrubbe
     }
   }
 
-  function seekToCurrentProgress(): void {
+  function seekToCurrentProgress(force = false): void {
     if (!runtimeEnabled || destroyed || video.seeking) return;
     const duration = finiteDuration(video);
     if (!duration) return;
@@ -261,7 +261,7 @@ export function createVideoScrubber(options: VideoScrubberOptions): VideoScrubbe
     const lastRenderableTime = Math.max(0, duration - Math.min(oneFrame, duration));
     const nextTime = lastRenderableTime * currentProgress;
     const halfFrame = oneFrame / 2;
-    if (Math.abs(video.currentTime - nextTime) < halfFrame) return;
+    if (!force && Math.abs(video.currentTime - nextTime) < halfFrame) return;
 
     try {
       video.currentTime = nextTime;
@@ -285,6 +285,19 @@ export function createVideoScrubber(options: VideoScrubberOptions): VideoScrubbe
     const computedTop = view.getComputedStyle(sticky).top;
     const parsedTop = Number.parseFloat(computedTop);
     return Number.isFinite(parsedTop) ? parsedTop : 0;
+  }
+
+  function isVideoVisible(): boolean {
+    const rect = video.getBoundingClientRect();
+    const viewportWidth = view.innerWidth || ownerDocument.documentElement.clientWidth;
+    const viewportHeight = view.innerHeight || ownerDocument.documentElement.clientHeight;
+
+    return (
+      rect.bottom > 0 &&
+      rect.right > 0 &&
+      rect.top < viewportHeight &&
+      rect.left < viewportWidth
+    );
   }
 
   function calculateProgress(): number {
@@ -311,6 +324,14 @@ export function createVideoScrubber(options: VideoScrubberOptions): VideoScrubbe
     animationFrame = scheduleFrame(runUpdate);
   }
 
+  function handleViewportChange(): void {
+    // Safari can reject or suspend muted playback while a video is off-screen. An observer with
+    // a positive root margin may fire before the video is actually visible, so retry the unlock
+    // as scrolling brings it into the viewport.
+    void attemptMediaUnlock();
+    requestUpdate();
+  }
+
   function handleMetadata(): void {
     markReady();
     seekToCurrentProgress();
@@ -326,7 +347,7 @@ export function createVideoScrubber(options: VideoScrubberOptions): VideoScrubbe
   }
 
   async function attemptMediaUnlock(): Promise<void> {
-    if (destroyed || !runtimeEnabled || unlocked || unlockInFlight) return;
+    if (destroyed || !runtimeEnabled || unlocked || unlockInFlight || !isVideoVisible()) return;
     unlockInFlight = true;
     try {
       const playResult = video.play();
@@ -334,7 +355,11 @@ export function createVideoScrubber(options: VideoScrubberOptions): VideoScrubbe
       video.pause();
       unlocked = true;
       root.removeEventListener("pointerdown", handlePointerRetry);
-      seekToCurrentProgress();
+      intersectionObserver?.disconnect();
+      intersectionObserver = null;
+      // Safari can accept currentTime assignments before it is able to paint their frames. Force
+      // the queued scroll position back through the media pipeline after playback is unlocked.
+      seekToCurrentProgress(true);
     } catch {
       // Autoplay can still be denied. Keep the pointer listener as a user-gesture retry.
       try {
@@ -360,8 +385,6 @@ export function createVideoScrubber(options: VideoScrubberOptions): VideoScrubbe
     intersectionObserver = new IntersectionObserverConstructor(
       (entries) => {
         if (!entries.some((entry) => entry.isIntersecting || entry.intersectionRatio > 0)) return;
-        intersectionObserver?.disconnect();
-        intersectionObserver = null;
         void attemptMediaUnlock();
       },
       { rootMargin: options.unlockRootMargin ?? "200px 0px" },
@@ -378,8 +401,8 @@ export function createVideoScrubber(options: VideoScrubberOptions): VideoScrubbe
     video.removeAttribute("controls");
     root.setAttribute("data-svs-enhanced", "true");
     root.setAttribute("data-svs-state", "active");
-    view.addEventListener("scroll", requestUpdate, { passive: true });
-    view.addEventListener("resize", requestUpdate, { passive: true });
+    view.addEventListener("scroll", handleViewportChange, { passive: true });
+    view.addEventListener("resize", handleViewportChange, { passive: true });
     root.addEventListener("pointerdown", handlePointerRetry, { passive: true });
     observeForUnlock();
     requestUpdate();
@@ -388,8 +411,8 @@ export function createVideoScrubber(options: VideoScrubberOptions): VideoScrubbe
   function stopRuntime(state: "disabled" | "reduced-motion"): void {
     if (runtimeEnabled) {
       runtimeEnabled = false;
-      view.removeEventListener("scroll", requestUpdate);
-      view.removeEventListener("resize", requestUpdate);
+      view.removeEventListener("scroll", handleViewportChange);
+      view.removeEventListener("resize", handleViewportChange);
       root.removeEventListener("pointerdown", handlePointerRetry);
       intersectionObserver?.disconnect();
       intersectionObserver = null;
