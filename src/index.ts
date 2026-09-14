@@ -26,6 +26,8 @@ export interface VideoScrubberOptions {
   frameRate?: number;
   /** How early the iOS media unlock observer starts watching. Defaults to `200px 0px`. */
   unlockRootMargin?: string;
+  /** Reload a buffered, stalled URL-backed video once per controller. Defaults to true. */
+  seekRecovery?: boolean;
   onProgress?: (progress: number, scrubber: VideoScrubber) => void;
   onReady?: (scrubber: VideoScrubber) => void;
   onError?: (error: Error, scrubber: VideoScrubber) => void;
@@ -203,6 +205,9 @@ export function createVideoScrubber(options: VideoScrubberOptions): VideoScrubbe
   let intersectionObserver: IntersectionObserver | null = null;
   let unlockInFlight = false;
   let unlocked = false;
+  let unlockGeneration = 0;
+  let recoveryTimer: number | null = null;
+  let recoveryUsed = false;
 
   const scheduleFrame =
     typeof view.requestAnimationFrame === "function"
@@ -253,7 +258,14 @@ export function createVideoScrubber(options: VideoScrubberOptions): VideoScrubbe
   }
 
   function seekToCurrentProgress(force = false): void {
-    if (!runtimeEnabled || destroyed || video.seeking) return;
+    if (!runtimeEnabled || destroyed || ownerDocument.hidden) return;
+    if (video.seeking) {
+      watchSeek();
+      return;
+    }
+    // Safari can expose metadata before its player can decode a seek. Progress
+    // remains queued until loadeddata/canplay, without changing onReady's contract.
+    if (video.readyState < 2) return;
     const duration = finiteDuration(video);
     if (!duration) return;
 
@@ -265,6 +277,7 @@ export function createVideoScrubber(options: VideoScrubberOptions): VideoScrubbe
 
     try {
       video.currentTime = nextTime;
+      watchSeek();
     } catch (error) {
       reportError(error);
     }
@@ -293,11 +306,63 @@ export function createVideoScrubber(options: VideoScrubberOptions): VideoScrubbe
     const viewportHeight = view.innerHeight || ownerDocument.documentElement.clientHeight;
 
     return (
+      !ownerDocument.hidden &&
       rect.bottom > 0 &&
       rect.right > 0 &&
       rect.top < viewportHeight &&
       rect.left < viewportWidth
     );
+  }
+
+  function clearRecovery(): void {
+    if (recoveryTimer !== null) view.clearTimeout(recoveryTimer);
+    recoveryTimer = null;
+  }
+
+  function canRecoverSeek(): boolean {
+    const source = video.currentSrc || video.src;
+    return (
+      runtimeEnabled &&
+      !destroyed &&
+      !recoveryUsed &&
+      options.seekRecovery !== false &&
+      !video.error &&
+      video.seeking &&
+      finiteDuration(video) !== null &&
+      isVideoVisible() &&
+      // Custom streams and MediaSource players own their source lifecycle.
+      !video.srcObject &&
+      !!source &&
+      !source.startsWith("blob:")
+    );
+  }
+
+  function watchSeek(): void {
+    if (recoveryTimer !== null || !canRecoverSeek()) return;
+    recoveryTimer = view.setTimeout(recoverSeek, 2500);
+  }
+
+  function recoverSeek(): void {
+    recoveryTimer = null;
+    if (!canRecoverSeek()) return;
+    const time = video.currentTime;
+    let buffered = false;
+    for (let i = 0; i < video.buffered.length; i++) {
+      if (time >= video.buffered.start(i) && time < video.buffered.end(i)) buffered = true;
+    }
+    // A pending network request is not evidence of a stalled decoder.
+    if (!buffered) {
+      watchSeek();
+      return;
+    }
+    recoveryUsed = true;
+    invalidateMediaUnlock();
+    try {
+      video.pause();
+      video.load();
+    } catch (error) {
+      reportError(error);
+    }
   }
 
   function calculateProgress(): number {
@@ -337,21 +402,57 @@ export function createVideoScrubber(options: VideoScrubberOptions): VideoScrubbe
     seekToCurrentProgress();
   }
 
+  function handleData(): void {
+    seekToCurrentProgress();
+    void attemptMediaUnlock();
+  }
+
   function handleSeeked(): void {
+    clearRecovery();
     // A newer scroll position may have arrived while the decoder was seeking.
     seekToCurrentProgress();
   }
 
   function handleMediaError(): void {
+    clearRecovery();
     reportError(errorFromMedia(video));
+  }
+
+  function handlePageResume(): void {
+    if (ownerDocument.hidden) {
+      clearRecovery();
+      return;
+    }
+    handleViewportChange();
+    watchSeek();
+  }
+
+  function invalidateMediaUnlock(): void {
+    unlockGeneration++;
+    if (unlockInFlight) video.pause();
+    unlockInFlight = false;
+  }
+
+  function handleEmptied(): void {
+    clearRecovery();
+    invalidateMediaUnlock();
+    unlocked = false;
+    if (runtimeEnabled) {
+      root.addEventListener("pointerdown", handlePointerRetry, { passive: true });
+      if (!intersectionObserver) observeForUnlock();
+    }
   }
 
   async function attemptMediaUnlock(): Promise<void> {
     if (destroyed || !runtimeEnabled || unlocked || unlockInFlight || !isVideoVisible()) return;
     unlockInFlight = true;
+    const generation = unlockGeneration;
     try {
       const playResult = video.play();
       if (playResult) await playResult;
+      // A reload, reduced-motion change or destroy may have handed playback back
+      // to the consumer while play() was pending. Do not pause their new session.
+      if (generation !== unlockGeneration || destroyed || !runtimeEnabled) return;
       video.pause();
       unlocked = true;
       root.removeEventListener("pointerdown", handlePointerRetry);
@@ -361,6 +462,7 @@ export function createVideoScrubber(options: VideoScrubberOptions): VideoScrubbe
       // the queued scroll position back through the media pipeline after playback is unlocked.
       seekToCurrentProgress(true);
     } catch {
+      if (generation !== unlockGeneration || destroyed || !runtimeEnabled) return;
       // Autoplay can still be denied. Keep the pointer listener as a user-gesture retry.
       try {
         video.pause();
@@ -368,7 +470,7 @@ export function createVideoScrubber(options: VideoScrubberOptions): VideoScrubbe
         // A media element may reject pause while its source is being replaced.
       }
     } finally {
-      unlockInFlight = false;
+      if (generation === unlockGeneration) unlockInFlight = false;
     }
   }
 
@@ -409,6 +511,8 @@ export function createVideoScrubber(options: VideoScrubberOptions): VideoScrubbe
   }
 
   function stopRuntime(state: "disabled" | "reduced-motion"): void {
+    clearRecovery();
+    invalidateMediaUnlock();
     if (runtimeEnabled) {
       runtimeEnabled = false;
       view.removeEventListener("scroll", handleViewportChange);
@@ -440,8 +544,14 @@ export function createVideoScrubber(options: VideoScrubberOptions): VideoScrubbe
     destroyed = true;
     video.removeEventListener("loadedmetadata", handleMetadata);
     video.removeEventListener("durationchange", handleMetadata);
+    video.removeEventListener("loadeddata", handleData);
+    video.removeEventListener("canplay", handleData);
+    video.removeEventListener("seeking", watchSeek);
     video.removeEventListener("seeked", handleSeeked);
+    video.removeEventListener("emptied", handleEmptied);
     video.removeEventListener("error", handleMediaError);
+    view.removeEventListener("pageshow", handlePageResume);
+    ownerDocument.removeEventListener("visibilitychange", handlePageResume);
     if (mediaQuery) {
       if (typeof mediaQuery.removeEventListener === "function") {
         mediaQuery.removeEventListener("change", handleMotionPreference);
@@ -477,8 +587,14 @@ export function createVideoScrubber(options: VideoScrubberOptions): VideoScrubbe
   writeProgress(0);
   video.addEventListener("loadedmetadata", handleMetadata);
   video.addEventListener("durationchange", handleMetadata);
+  video.addEventListener("loadeddata", handleData);
+  video.addEventListener("canplay", handleData);
+  video.addEventListener("seeking", watchSeek);
   video.addEventListener("seeked", handleSeeked);
+  video.addEventListener("emptied", handleEmptied);
   video.addEventListener("error", handleMediaError);
+  view.addEventListener("pageshow", handlePageResume);
+  ownerDocument.addEventListener("visibilitychange", handlePageResume);
   if (mediaQuery) {
     if (typeof mediaQuery.addEventListener === "function") {
       mediaQuery.addEventListener("change", handleMotionPreference);
