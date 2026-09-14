@@ -58,20 +58,23 @@ function makeRect(top: number, height: number): DOMRect {
 function setVideoState(
   video: HTMLVideoElement,
   initialDuration: number,
-  options: { markSeekingOnSet?: boolean } = {},
+  options: { markSeekingOnSet?: boolean; readyState?: number } = {},
 ): {
   getCurrentTime: () => number;
   setDuration: (duration: number) => void;
   setSeeking: (seeking: boolean) => void;
+  setReadyState: (readyState: number) => void;
   assignments: number[];
 } {
   let duration = initialDuration;
   let currentTime = 0;
   let seeking = false;
+  let readyState = options.readyState ?? 4;
   const assignments: number[] = [];
 
   Object.defineProperties(video, {
     duration: { configurable: true, get: () => duration },
+    readyState: { configurable: true, get: () => readyState },
     currentTime: {
       configurable: true,
       get: () => currentTime,
@@ -91,6 +94,9 @@ function setVideoState(
     },
     setSeeking: (value) => {
       seeking = value;
+    },
+    setReadyState: (value) => {
+      readyState = value;
     },
     assignments,
   };
@@ -195,12 +201,32 @@ describe("createVideoScrubber", () => {
 
   afterEach(() => {
     for (const scrubber of activeScrubbers) scrubber.destroy();
+    vi.useRealTimers();
     document.body.innerHTML = "";
   });
 
   function track(scrubber: VideoScrubber): VideoScrubber {
     activeScrubbers.push(scrubber);
     return scrubber;
+  }
+
+  function stalledVideo(seekRecovery = true) {
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+    const { root, video } = renderScrubber();
+    video.src = "/film.mp4";
+    vi.spyOn(video, "getBoundingClientRect").mockReturnValue(makeRect(100, 500));
+    const media = setVideoState(video, 10, { markSeekingOnSet: true });
+    const buffered = { length: 1, start: () => 0, end: () => 10 };
+    Object.defineProperty(video, "buffered", { configurable: true, value: buffered });
+    const load = vi.spyOn(video, "load").mockImplementation(() => {
+      media.setSeeking(false);
+      media.setReadyState(0);
+      video.dispatchEvent(new Event("emptied"));
+    });
+    const scrubber = track(createVideoScrubber({ root, seekRecovery }));
+    scrubber.setProgress(0.25);
+    video.dispatchEvent(new Event("seeking"));
+    return { root, video, media, buffered, load, scrubber };
   }
 
   it("maps sticky runway geometry to 0-1 progress in both scroll directions", () => {
@@ -289,6 +315,181 @@ describe("createVideoScrubber", () => {
     video.dispatchEvent(new Event("durationchange"));
     expect(onReady).toHaveBeenCalledOnce();
     expect(media.getCurrentTime()).toBeCloseTo((8 - 1 / 30) * 0.5);
+  });
+
+  it("waits for frame data while preserving metadata callbacks and the latest target", () => {
+    const { root, video } = renderScrubber();
+    const media = setVideoState(video, 10, { readyState: 1 });
+    const onReady = vi.fn();
+    const scrubber = track(createVideoScrubber({ root, onReady }));
+
+    scrubber.setProgress(0.25);
+    video.dispatchEvent(new Event("loadedmetadata"));
+    scrubber.setProgress(0.75);
+    expect(onReady).toHaveBeenCalledOnce();
+    expect(media.assignments).toHaveLength(0);
+    expect(scrubber.progress).toBe(0.75);
+
+    media.setReadyState(2);
+    video.dispatchEvent(new Event("loadeddata"));
+    expect(media.assignments).toHaveLength(1);
+    expect(media.getCurrentTime()).toBeCloseTo((10 - 1 / 30) * 0.75);
+    expect(onReady).toHaveBeenCalledOnce();
+  });
+
+  it("retries an unavailable frame on canplay without another scroll event", () => {
+    const { root, video } = renderScrubber();
+    const media = setVideoState(video, 10, { readyState: 1 });
+    const scrubber = track(createVideoScrubber({ root }));
+    scrubber.setProgress(0.5);
+    expect(media.assignments).toHaveLength(0);
+    media.setReadyState(4);
+    video.dispatchEvent(new Event("canplay"));
+    expect(media.getCurrentTime()).toBeCloseTo((10 - 1 / 30) * 0.5);
+  });
+
+  it("reloads a buffered stalled seek once and preserves the latest manual target", () => {
+    const { video, media, load, scrubber } = stalledVideo();
+    vi.advanceTimersByTime(1000);
+    scrubber.setProgress(0.75);
+    vi.advanceTimersByTime(1499);
+    expect(load).not.toHaveBeenCalled();
+    vi.advanceTimersByTime(1);
+    expect(load).toHaveBeenCalledOnce();
+    expect(scrubber.destroyed).toBe(false);
+    expect(scrubber.progress).toBe(0.75);
+
+    video.dispatchEvent(new Event("loadedmetadata"));
+    expect(media.assignments).toHaveLength(1);
+    media.setReadyState(4);
+    video.dispatchEvent(new Event("loadeddata"));
+    expect(media.getCurrentTime()).toBeCloseTo((10 - 1 / 30) * 0.75);
+    vi.advanceTimersByTime(10000);
+    expect(load).toHaveBeenCalledOnce();
+  });
+
+  it("waits for network data and recovers only when the pending time is buffered", () => {
+    const { buffered, load } = stalledVideo();
+    buffered.length = 0;
+    vi.advanceTimersByTime(7500);
+    expect(load).not.toHaveBeenCalled();
+    buffered.length = 1;
+    vi.advanceTimersByTime(2500);
+    expect(load).toHaveBeenCalledOnce();
+  });
+
+  it("does not reload a seek that completed normally", () => {
+    const { video, media, load } = stalledVideo();
+    vi.advanceTimersByTime(1000);
+    media.setSeeking(false);
+    video.dispatchEvent(new Event("seeked"));
+    vi.advanceTimersByTime(5000);
+    expect(load).not.toHaveBeenCalled();
+  });
+
+  it.each(["destroy", "reduced motion", "media error"])("cancels recovery on %s", (reason) => {
+    const { video, load, scrubber } = stalledVideo();
+    vi.advanceTimersByTime(1000);
+    if (reason === "destroy") scrubber.destroy();
+    else if (reason === "reduced motion") changeReducedMotion(true);
+    else {
+      Object.defineProperty(video, "error", { configurable: true, value: { code: 3 } });
+      video.dispatchEvent(new Event("error"));
+    }
+    window.dispatchEvent(new Event("pageshow"));
+    document.dispatchEvent(new Event("visibilitychange"));
+    flushFrames();
+    vi.advanceTimersByTime(5000);
+    expect(load).not.toHaveBeenCalled();
+  });
+
+  it("defers recovery while hidden or offscreen and retries when the video returns", () => {
+    const { video, load } = stalledVideo();
+    const hidden = vi.spyOn(document, "hidden", "get").mockReturnValue(true);
+    document.dispatchEvent(new Event("visibilitychange"));
+    vi.advanceTimersByTime(5000);
+    expect(load).not.toHaveBeenCalled();
+
+    vi.mocked(video.getBoundingClientRect).mockReturnValue(makeRect(1200, 500));
+    hidden.mockReturnValue(false);
+    document.dispatchEvent(new Event("visibilitychange"));
+    flushFrames();
+    vi.advanceTimersByTime(5000);
+    expect(load).not.toHaveBeenCalled();
+
+    vi.mocked(video.getBoundingClientRect).mockReturnValue(makeRect(100, 500));
+    window.dispatchEvent(new Event("scroll"));
+    flushFrames();
+    vi.advanceTimersByTime(2500);
+    expect(load).toHaveBeenCalledOnce();
+  });
+
+  it.each(["disabled", "blob", "srcObject"])("leaves %s media recovery to its consumer", (source) => {
+    const { video, load } = stalledVideo(source !== "disabled");
+    if (source === "blob") video.src = "blob:https://example.com/stream";
+    if (source === "srcObject") Object.defineProperty(video, "srcObject", { value: {} });
+    vi.advanceTimersByTime(5000);
+    expect(load).not.toHaveBeenCalled();
+  });
+
+  it.each(["pageshow", "visibilitychange"])("remeasures restored scroll geometry on %s", (event) => {
+    const { root, sticky, video } = renderScrubber();
+    const media = setVideoState(video, 10);
+    vi.spyOn(root, "getBoundingClientRect").mockReturnValue(makeRect(-1500, 4000));
+    vi.spyOn(sticky, "getBoundingClientRect").mockReturnValue(makeRect(0, 1000));
+    const scrubber = track(createVideoScrubber({ root }));
+    flushFrames();
+    expect(scrubber.progress).toBe(0.5);
+    vi.mocked(root.getBoundingClientRect).mockReturnValue(makeRect(-2250, 4000));
+    (event === "pageshow" ? window : document).dispatchEvent(new Event(event));
+    flushFrames();
+    expect(scrubber.progress).toBe(0.75);
+    expect(media.getCurrentTime()).toBeCloseTo((10 - 1 / 30) * 0.75);
+  });
+
+  it.each(["destroy", "reduced motion"])("ignores a pending play resolution after %s", async (reason) => {
+    const { root, video } = renderScrubber();
+    const media = setVideoState(video, 10);
+    vi.spyOn(video, "getBoundingClientRect").mockReturnValue(makeRect(100, 500));
+    let finishPlay = () => {};
+    play.mockImplementationOnce(() => new Promise<void>((resolve) => { finishPlay = resolve; }));
+    const scrubber = track(createVideoScrubber({ root }));
+    IntersectionObserverMock.instances[0].trigger(true);
+    if (reason === "destroy") scrubber.destroy();
+    else changeReducedMotion(true);
+    pause.mockClear();
+    finishPlay();
+    await Promise.resolve();
+    await Promise.resolve();
+    expect(pause).not.toHaveBeenCalled();
+    expect(media.assignments).toHaveLength(0);
+    expect(video.controls).toBe(true);
+  });
+
+  it("ignores the old play promise after recovery starts a new media load", async () => {
+    const { video, media, load, scrubber } = stalledVideo();
+    let finishOldPlay = () => {};
+    let finishNewPlay = () => {};
+    play.mockImplementationOnce(() => new Promise<void>((resolve) => { finishOldPlay = resolve; }));
+    play.mockImplementationOnce(() => new Promise<void>((resolve) => { finishNewPlay = resolve; }));
+    IntersectionObserverMock.instances[0].trigger(true);
+    vi.advanceTimersByTime(2500);
+    expect(load).toHaveBeenCalledOnce();
+
+    scrubber.setProgress(0.75);
+    media.setReadyState(4);
+    video.dispatchEvent(new Event("loadeddata"));
+    expect(play).toHaveBeenCalledTimes(2);
+    pause.mockClear();
+    finishOldPlay();
+    await Promise.resolve();
+    await Promise.resolve();
+    expect(pause).not.toHaveBeenCalled();
+    finishNewPlay();
+    await Promise.resolve();
+    await Promise.resolve();
+    expect(pause).toHaveBeenCalledOnce();
+    expect(media.getCurrentTime()).toBeCloseTo((10 - 1 / 30) * 0.75);
   });
 
   it("stays disabled for reduced motion and responds to preference changes", () => {

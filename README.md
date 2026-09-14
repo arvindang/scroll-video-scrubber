@@ -9,6 +9,7 @@ A small, dependency-free TypeScript utility that turns vertical scroll progress 
 - Scrubs forward and backward with native page scroll.
 - Coalesces work with `requestAnimationFrame` and avoids flooding the video decoder with seeks.
 - Defers the iOS/Safari media unlock until the story is near the viewport.
+- Waits for frame data before seeking and can recover a buffered seek that stalls.
 - Supports element references or selectors, lifecycle callbacks, and manual progress control.
 - Respects `prefers-reduced-motion` by default and restores the video’s original native controls for the fallback.
 - Ships as framework-agnostic ESM with TypeScript types and a small optional stylesheet.
@@ -111,6 +112,7 @@ There is no scroll-jacking and no animation framework. Native scrolling stays in
 | `reducedMotionQuery` | `string` | `(prefers-reduced-motion: reduce)` | Media query used for the reduced-motion preference. |
 | `frameRate` | `number` | `30` | Used to avoid seeks smaller than a useful frame interval. |
 | `unlockRootMargin` | `string` | `200px 0px` | How early the Safari/iOS media unlock observer starts watching. Playback waits for actual visibility. |
+| `seekRecovery` | `boolean` | `true` | Reloads a visible URL-backed video at most once if a buffered seek stays pending for 2.5 seconds. Set to `false` when your player manages recovery. |
 | `onReady` | `(controller) => void` | — | Runs after usable video metadata is available. |
 | `onProgress` | `(progress, controller) => void` | — | Runs when effective progress changes. |
 | `onError` | `(error, controller) => void` | — | Receives recoverable setup or media errors. |
@@ -196,8 +198,10 @@ Also keep the asset reasonably small, include `muted` and `playsinline`, serve c
 
 ## Browser notes
 
-- Metadata must load before duration-based seeking can begin. The controller queues progress until it can seek safely.
+- Metadata provides duration, but a frame must also be available (`readyState >= HAVE_CURRENT_DATA`) before seeking begins. `loadeddata` and `canplay` apply the latest queued progress without requiring another scroll event. `onReady` still reports usable metadata; it does not guarantee that a frame has decoded.
 - Mobile Safari may require a muted play/pause cycle before programmatic seeking works reliably; the library performs that unlock near the viewport.
+- A visible video that remains in `seeking` for 2.5 seconds can be reloaded once per controller, preserving the latest progress. Recovery waits when the requested time is not buffered, skips background/offscreen videos, and is canceled on reduced motion or destruction. `srcObject` and `blob:` sources are never automatically reloaded; use `seekRecovery: false` for other sources managed by an external player.
+- Returning to a tab or restoring a page remeasures scroll geometry and resynchronizes the video. A pending media unlock cannot pause consumer playback after the controller is stopped or destroyed.
 - Browser decoders differ. Test the actual encoded asset on Safari/iOS, Chrome/Android, and Firefox—not only the desktop browser used during development.
 - Cross-origin video hosts must allow the media request and support byte ranges. Hosting the asset with the site is usually the most dependable production setup.
 
@@ -211,6 +215,10 @@ npm run build
 ```
 
 The guide lives in `docs/` and is built with Vite for GitHub Pages.
+
+The readiness and stalled-seek regression tests simulate media event timing;
+they do not replace testing a cold load, restored scroll position, and reverse
+scrolling with the actual video in desktop Safari.
 
 ## License
 
